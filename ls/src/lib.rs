@@ -1,39 +1,16 @@
 use std::io;
 use std::cmp::Reverse;
 use std::time::SystemTime;
+use std::os::unix::fs::MetadataExt;
+use chrono::{Duration, Local, NaiveDateTime};
 use clap::Parser;
 use std::{
     io::Error,
-    fs::{read_dir, ReadDir, DirEntry}
+    fs::{read_dir, ReadDir, DirEntry, Metadata}
 };
+use users::{get_user_by_uid, get_group_by_gid};
 
 type FileSize = u64;
-type FileModTime = SystemTime;
-struct FileData{
-    file_name: String, 
-    mod_time: FileModTime, 
-    file_size: FileSize,
-    file_type: String,
-    permissions: Option<String>,
-    group: Option<String>,
-    author: Option<String>,
-    date: Option<String>
-}
-
-impl FileData {
-    pub fn new(file_name: String, mod_time: FileModTime, file_size: FileSize, file_type: String) -> FileData {
-        FileData {
-            file_name,
-            mod_time,
-            file_size,
-            file_type,
-            permissions: None,
-            group: None,
-            author: None,
-            date: None,
-        }
-    }
-}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about=None)]
@@ -108,45 +85,104 @@ pub fn run(mut config: Cli) -> Result<(), Error> {
     if config.human_readable || config.no_group || config.author {
         config.long_listing = true;
     }
+    
+    
+    let mut contents: Vec<DirEntry> = gather_dir_entries(files);
+ 
+    preprocess_entries(&mut contents, &config);
 
     if config.long_listing {
-        long_listing_display(config, files)?
+        long_listing_display(contents, &config)?
     }
     else {
-        short_listing_display(config, files)?
+        short_listing_display(contents, &config.classify, &config.fill_width)?
     }
     
 
     Ok(())
 }
 
-fn long_listing_display(config: Cli, files: ReadDir) -> Result<(), io::Error> {
-    Ok(())
+fn preprocess_entries(contents: &mut Vec<DirEntry>, config: &Cli) -> () {
+    //filter dot files
+    if !config.all {
+        remove_dot_files(contents);
+    }   
+
+    if config.ignore_backups {
+        remove_backups(contents);
+    }
+
+    if config.sort_by_time || config.sort_by_size || config.directory_order {
+        sort_files(config, contents);
+    }
 }
 
-fn short_listing_display(config: Cli, files: ReadDir) -> Result<(), io::Error> {
+pub mod long_listing {
+    pub fn long_listing_display(contents: Vec<DirEntry>, config: &Cli) -> Result<(), io::Error> {
+        //
+        let mut output: Vec<Vec<String>> = Vec::new(); 
+        
+    
+        for entry in contents {
+            let mut output_line: Vec<String> = Vec::new();
+            let metadata = entry.metadata()?;
+            
+            let mode_string = get_mode_string(&entry, &metadata);
+            
+            let link_count = metadata.nlink();
+    
+            let user = get_user_by_uid(metadata.uid()).unwrap();
+            let username = user.name();
+            
+            let username_string = match username.to_str() {
+                Some(s) => s,
+                _ => panic!("No username")
+            };
+    
+            let group = get_group_by_gid(metadata.gid()).unwrap();
+            let groupname = group.name();
+    
+            let groupname_string = match groupname.to_str() {
+                Some(s) => s,
+                _ => panic!("No groupname")
+            };
+    
+            let filesize = metadata.len();
+            let filename = match entry.file_name().into_string() {
+                Ok(s) => s,
+                Err(_) => panic!("Could not read unicode")
+            };
+    
+            let ctime = metadata.ctime();
+            let offset = Local::now().offset().local_minus_utc();
+            let naive_time = match NaiveDateTime::from_timestamp_opt(ctime, 0) {
+                Some(s) => s,
+                None => panic!("failed")
+            };
+            let time_adjusted = naive_time + Duration::seconds(i64::from(offset));
+            let time_string = time_adjusted.to_string();
+    
+            output_line.push(mode_string);
+            output_line.push(link_count.to_string());
+            output_line.push(username_string.to_string());
+            output_line.push(groupname_string.to_string());
+            output_line.push(filesize.to_string());
+            output_line.push(filename);
+            output_line.push(time_string);
+            output.push(output_line);
+        }
+    
+        Ok(())
+    }
+}
+
+fn short_listing_display(contents: Vec<DirEntry>, classify: &bool, fill_width: &bool) -> Result<(), io::Error> {
     // options that can be used here:
     //  almost_all
     //  color
     //  ignore
     //  indicator_style
     
-    // gather file contents data
-    let mut contents: Vec<DirEntry> = gather_dir_entries(files);
-  
-    //filter dot files
-    if !config.all {
-        remove_dot_files(&mut contents);
-    }   
-
-    if config.ignore_backups {
-        remove_backups(&mut contents);
-    }
-
-    if config.sort_by_time || config.sort_by_size || config.directory_order {
-        sort_files(&config, &mut contents);
-    }
-
     let mut output: String = "".to_string();
     
     for element in contents {
@@ -155,10 +191,10 @@ fn short_listing_display(config: Cli, files: ReadDir) -> Result<(), io::Error> {
             Err(_) => panic!("Could not read unicode")
         };
         output.push_str(&file_name);
-        if config.classify && file_is_dir(&element) {
+        if *classify && file_is_dir(&element) {
             output.push_str("/");
         }
-        if config.fill_width {
+        if *fill_width {
             output.push_str(",");
         }
         output.push_str("    ");
@@ -247,4 +283,42 @@ fn file_is_dir(file: &DirEntry) -> bool {
 
     if file_type.is_dir() {true}
     else{false}
+}
+
+fn get_mode_string(entry: &DirEntry, metadata: &Metadata) -> String {
+
+    let mode = metadata.mode();
+    let mut mode_string: String = "".to_string();
+
+    if file_is_dir(&entry) {mode_string.push('d');}
+    else {mode_string.push('-');}
+
+    if mode & 0o400 > 0 {mode_string.push('r');}
+    else {mode_string.push('-');}
+
+    if mode & 0o200 > 0 {mode_string.push('w');}
+    else {mode_string.push('-');}
+
+    if mode & 0o100 > 0 {mode_string.push('x');}
+    else {mode_string.push('-');}
+
+    if mode & 0o40 > 0 {mode_string.push('r');}
+    else {mode_string.push('-');}
+       
+    if mode & 0o20 > 0 {mode_string.push('w');}
+    else {mode_string.push('-');}
+        
+    if mode & 0o10 > 0 {mode_string.push('x');}
+    else {mode_string.push('-');}
+        
+    if mode & 0o4 > 0 {mode_string.push('r');}
+    else {mode_string.push('-');} 
+
+    if mode & 0o2 > 0 {mode_string.push('w');}
+    else {mode_string.push('-');}
+
+    if mode & 0o1 > 0 {mode_string.push('x');}
+    else {mode_string.push('-');}
+
+    mode_string
 }
