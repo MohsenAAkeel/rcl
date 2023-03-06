@@ -1,6 +1,7 @@
 use clap::Parser;
 use ls::{run, Cli};
 
+
 fn main() {
     let config = Cli::parse();
     
