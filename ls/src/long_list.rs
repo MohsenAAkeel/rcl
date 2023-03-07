@@ -17,11 +17,12 @@ pub mod long_listing {
     
         for entry in contents {
             let mut output_line: Vec<String> = Vec::new();
+            let mut group: String = "".to_string();
             let metadata = entry.metadata()?;
             let mode_string = utils::get_mode_string(&entry, &metadata);
             let link_count = metadata.nlink().to_string();
             let user = get_username(&metadata);
-            let group = get_group_name(&metadata);
+            if !config.no_group {group = get_group_name(&metadata);}
             let filesize = metadata.len();
             let filename = match entry.file_name().into_string() {
                 Ok(s) => s,
@@ -33,7 +34,7 @@ pub mod long_listing {
             output_line.push(mode_string);
             output_line.push(link_count);
             output_line.push(user);
-            output_line.push(group);
+            if !config.no_group{output_line.push(group);}
             output_line.push(filesize.to_string());
             output_line.push(file_date);
             output_line.push(filename);
