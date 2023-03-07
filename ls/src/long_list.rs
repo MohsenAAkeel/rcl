@@ -1,36 +1,68 @@
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use chrono::{Duration, Local, NaiveDateTime};
-use std::fs::DirEntry;
+use std::fs::{DirEntry, Metadata};
 use users::{get_user_by_uid, get_group_by_gid};
 use crate::Cli;
 
 use crate::utils;
 pub use long_listing::long_listing_display;
 
-pub mod long_listing {
+mod long_listing {
     use super::*;
+
     pub fn long_listing_display(contents: Vec<DirEntry>, config: &Cli) -> Result<(), io::Error> {
-        //
+        /* This function is the entry function to the long listing display
+         * option of the ls command. 
+         *
+         * @params
+         *  contents - A vector of DirEntry elements
+         *  config - a clap config struct holding all user option input
+         *
+         * @returns
+         *  Returns unit type () 
+         */
+        // container holding vector of file metadata
         let mut output: Vec<Vec<String>> = Vec::new(); 
         
-    
+        // iterate over files and generate relevant listing data    
         for entry in contents {
+            // container holding file metadata
+            let metadata = entry.metadata()?;
+            let output_line: Vec<String> = gather_file_data(&entry, &metadata, config);
+            output.push(output_line);
+        }
+        display_listing(output)
+    }
+
+    fn gather_file_data(entry: &DirEntry, metadata: &Metadata, config: &Cli) -> Vec<String> {
+            /* this private function collects all relevant file metadata
+            * for the long listing display option. 
+            *
+            * @params
+            *   entry - a DirEntry struct for which metadata will be collected
+            *   metadata - a Netadata struct containing all relevant file details
+            *   config - a clap Cli struct containing user option input
+            *
+            * @returns
+            *   returns a vector of strings, each element corresponding to
+            *   a selected piece of file data
+            */
             let mut output_line: Vec<String> = Vec::new();
             let mut group: String = "".to_string();
-            let metadata = entry.metadata()?;
-            let mode_string = utils::get_mode_string(&entry, &metadata);
+            let mode_string = utils::get_mode_string(&entry, metadata);
             let link_count = metadata.nlink().to_string();
-            let user = get_username(&metadata);
-            if !config.no_group {group = get_group_name(&metadata);}
+            let user = get_username(metadata);
+            if !config.no_group {group = get_group_name(metadata);}
             let filesize = metadata.len();
             let filename = match entry.file_name().into_string() {
                 Ok(s) => s,
                 Err(_) => panic!("Could not read unicode")
             };
-    
-            let file_date = get_file_status_date(&metadata);
-    
+            let file_date = get_file_status_date(metadata);
+   
+            // pushing to vector in standard order of linux ls 
+            // long listing display output
             output_line.push(mode_string);
             output_line.push(link_count);
             output_line.push(user);
@@ -38,9 +70,8 @@ pub mod long_listing {
             output_line.push(filesize.to_string());
             output_line.push(file_date);
             output_line.push(filename);
-            output.push(output_line);
-        }
-        display_listing(output)
+
+            output_line
     }
     
     fn display_listing(output: Vec<Vec<String>>) -> Result<(), io::Error> {
@@ -74,7 +105,7 @@ pub mod long_listing {
        Ok(())
     }
 
-    fn get_username(metadata: &dyn MetadataExt) -> String {
+    fn get_username(metadata: &Metadata) -> String {
         
         let user = get_user_by_uid(metadata.uid()).unwrap();
         let username = user.name();
@@ -87,7 +118,7 @@ pub mod long_listing {
         username_string.to_string()
     }
 
-    fn get_group_name(metadata: &dyn MetadataExt) -> String {
+    fn get_group_name(metadata: &Metadata) -> String {
         let group = get_group_by_gid(metadata.gid()).unwrap();
         let groupname = group.name();
 
@@ -99,7 +130,7 @@ pub mod long_listing {
         groupname_string.to_string()
     }
 
-    fn get_file_status_date(metadata: &dyn MetadataExt) -> String {
+    fn get_file_status_date(metadata: &Metadata) -> String {
         let ctime = metadata.ctime();
         let offset = Local::now().offset().local_minus_utc();
         let naive_time = match NaiveDateTime::from_timestamp_opt(ctime, 0) {

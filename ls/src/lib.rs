@@ -10,7 +10,7 @@ use std::{
 
 mod utils;
 mod long_list;
-use crate::long_list::long_listing;
+use long_list::long_listing_display;
 type FileSize = u64;
 
 #[derive(Parser)]
@@ -93,7 +93,7 @@ pub fn run(mut config: Cli) -> Result<(), Error> {
     preprocess_entries(&mut contents, &config);
 
     if config.long_listing {
-        long_listing::long_listing_display(contents, &config)?
+        long_listing_display(contents, &config)?
     }
     else {
         short_listing_display(contents, &config.classify, &config.fill_width)?
