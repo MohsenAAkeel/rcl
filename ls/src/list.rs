@@ -7,6 +7,7 @@ use crate::Cli;
 
 use crate::utils;
 pub use long_listing::long_listing_display;
+pub use short_listing::short_listing_display;
 
 mod long_listing {
     use super::*;
@@ -140,5 +141,42 @@ mod long_listing {
         let time_adjusted = naive_time + Duration::seconds(i64::from(offset));
 
         time_adjusted.to_string()
+    }
+}
+
+
+mod short_listing {
+    use super::*;
+    pub fn short_listing_display(
+        contents: Vec<DirEntry>, 
+        classify: &bool, 
+        fill_width: &bool) -> Result<(), io::Error> {
+        // options that can be used here:
+        //  almost_all
+        //  color
+        //  ignore
+        //  indicator_style
+        
+        let mut output: String = "".to_string();
+        
+        for element in contents {
+            let file_name = match element.file_name().into_string() {
+                Ok(s) => s,
+                Err(_) => panic!("Could not read unicode")
+            };
+            output.push_str(&file_name);
+            if *classify && utils::file_is_dir(&element) {
+                output.push_str("/");
+            }
+            if *fill_width {
+                output.push_str(",");
+            }
+            output.push_str("    ");
+        }
+
+        println!("{}", output);
+
+        Ok(())
+        
     }
 }
