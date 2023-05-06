@@ -9,7 +9,25 @@ use pnet::packet::{
     }
 };
 use pnet::transport::{TransportProtocol, icmp_packet_iter, transport_channel, TransportChannelType::Layer4};
-use std::{thread, time::{Duration, Instant}};
+use std::{thread, process, time::{Duration, Instant}};
+use std::sync::{
+    Arc,
+    Mutex,
+};
+
+struct State {
+    requests: u32,
+    replies: u32,
+}
+
+impl State {
+    fn new() -> Self {
+        State {
+            requests: 0,
+            replies: 0,
+        }
+    }
+}
 
 fn main() {
     let ipadd = Ipv4Addr::new(192, 168, 50, 87);
@@ -30,13 +48,13 @@ fn main() {
  *
  */
 fn ping(ip: IpAddr, freq: u64) -> (){
-    let mut requests = 0; // the echo request count 
-    let mut replies = 0; // the recho reply count
-    let mut min: Duration;
-    let mut max: Duration;
-    let mut rtts: Vec<Duration>;
-    ctrlc::set_handler(move || calc_stats(requests, replies, min, max, rtts))
+    let state = Arc::new(Mutex::new(State::new()));
+   
+    // clone state and give it to the closure handling Ctrl+C input
+    let cstate = state.clone();
+    ctrlc::set_handler(move || calc_stats(&cstate))
         .expect("Could not calculate stats");
+
     let prot = TransportProtocol::Ipv4(Icmp);
     // even though ICMP is a layer 3 (network layer) protocol,
     // pnet needs to open a layer 4 (transport layer) channel
@@ -60,13 +78,13 @@ fn ping(ip: IpAddr, freq: u64) -> (){
 
     loop {
         let packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
-        //packet.set_payload(&[requests]);
+        //packet.set_payload(&[]);
         let sent = send.send_to(packet, ip);
-        let now=Instant::now(); 
+        let now=Instant::now(); // begin timing the reply
         match sent {
             Ok(_) => {
-                requests += 1;
-                ()
+                // send was successful, increment request count
+                (*state.lock().unwrap()).requests += 1;
             },
             Err(e) => panic!("Failed to send ICMP packet, {}", e)
         }
@@ -79,7 +97,8 @@ fn ping(ip: IpAddr, freq: u64) -> (){
                     pkt.payload(), 
                     now.elapsed()
                 );
-                replies += 1;
+                // there was a reply, increment the reply count
+                (*state.lock().unwrap()).replies += 1;
             },
             Err(e) => panic!("failed on recv, {}", e)
         }
@@ -87,12 +106,14 @@ fn ping(ip: IpAddr, freq: u64) -> (){
     } 
 }
 
-fn calc_stats(requests: u32, replies: u32, min: Duration, max: Duration, rtts: Vec<Duration>) -> () {
+fn calc_stats(state: &Mutex<State>) -> () {
     let mut rate: f32 = 0.0; 
-    if requests != 0 {
-        rate = 100.0 * replies as f32 / requests as f32;
+    let state = state.lock().unwrap();
+    if state.requests != 0 {
+        rate = 100.0 * (((state.requests as f32) - (state.replies as f32)) / state.requests as f32);
     }
 
-    println!("{} packets transmitted, {} packets received, {}% packet loss", requests, replies, rate);
-    println!("rount-trip min/avg/max = {:?}/{:?}/{:?}", min, rtts, max);
+    println!("{} packets transmitted, {} packets received, {}% packet loss", state.requests, state.replies, rate);
+
+    process::exit(0);
 }
